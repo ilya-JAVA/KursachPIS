@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Generated files
+output/
+*.log
+
+# OS
+.DS_Store
+
+# Test videos and datasets
+data/
