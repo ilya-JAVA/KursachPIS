@@ -6,7 +6,7 @@ import zipfile
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -39,12 +39,30 @@ async def health_check():
 
 
 @app.post("/transcribe")
-async def transcribe_video(file: UploadFile = File(...)):
+async def transcribe_video(
+    file: UploadFile = File(...),
+    model_name: str = Form("small")
+):
     """Распознаёт речь, создаёт SRT и встраивает субтитры в видео."""
 
     allowed_extensions = {".mp4", ".mov", ".mkv", ".avi"}
 
-    extension = Path(file.filename or "").suffix.lower()
+    allowed_models = {"small", "medium"}
+
+    if model_name not in allowed_models:
+        raise HTTPException(
+            status_code=400,
+            detail="Неподдерживаемая модель. Доступны: small, medium."
+        )
+
+    filename = file.filename or ""
+    extension = Path(filename).suffix.lower()
+
+    if not filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Имя файла не указано."
+        )
 
     if extension not in allowed_extensions:
         raise HTTPException(
@@ -57,23 +75,49 @@ async def transcribe_video(file: UploadFile = File(...)):
     temp_dir = Path(tempfile.mkdtemp())
     input_path = temp_dir / f"{request_id}{extension}"
 
-    try:
-        logger.info("Получен файл: %s", file.filename)
+    # process_video сохраняет результаты в общую папку output.
+    generated_files = [
+        Path("output") / f"{request_id}_{model_name}_subtitled.mp4",
+        Path("output") / f"{request_id}_{model_name}.srt"
+    ]
 
+    try:
+        logger.info(
+            "Получен файл: %s. ID запроса: %s",
+            filename,
+            request_id
+        )
+
+        # Сохраняем файл на диск, не загружая его целиком в память.
         with input_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        logger.info("Начинаем обработку файла: %s", file.filename)
+        # Проверяем, что файл не пустой.
+        if input_path.stat().st_size == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Загруженный файл пуст."
+            )
 
-        output_video, output_srt = process_video(str(input_path))
+        logger.info("Начинаем обработку: %s", request_id)
+
+        output_video, output_srt = process_video(
+            str(input_path),
+            model_name=model_name
+        )
 
         zip_path = temp_dir / "subtitle_results.zip"
 
-        with zipfile.ZipFile(zip_path, "w") as archive:
+        # Упаковываем видео и субтитры в ZIP-архив.
+        with zipfile.ZipFile(
+            zip_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED
+        ) as archive:
             archive.write(output_video, Path(output_video).name)
             archive.write(output_srt, Path(output_srt).name)
 
-        logger.info("Обработка завершена: %s", file.filename)
+        logger.info("Обработка успешно завершена: %s", request_id)
 
         return FileResponse(
             path=zip_path,
@@ -86,8 +130,15 @@ async def transcribe_video(file: UploadFile = File(...)):
             )
         )
 
+    except HTTPException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
     except Exception:
-        logger.exception("Ошибка при обработке файла")
+        logger.exception(
+            "Ошибка при обработке файла. ID запроса: %s",
+            request_id
+        )
 
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -97,4 +148,8 @@ async def transcribe_video(file: UploadFile = File(...)):
         )
 
     finally:
+        # Удаляем промежуточные результаты из общей папки output.
+        for generated_file in generated_files:
+            generated_file.unlink(missing_ok=True)
+
         await file.close()

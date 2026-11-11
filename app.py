@@ -14,7 +14,7 @@ API_URL = "http://127.0.0.1:8000/transcribe"
 RESULTS_DIR = Path("output/gradio_results")
 
 
-def generate_subtitles(video_path):
+def generate_subtitles(video_path, model_name):
     """Отправляет видео в FastAPI и получает готовые файлы."""
 
     if not video_path:
@@ -41,6 +41,9 @@ def generate_subtitles(video_path):
                         video_file,
                         "application/octet-stream"
                     )
+                },
+                data={
+                    "model_name": model_name
                 },
                 timeout=1800
             )
@@ -117,6 +120,14 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         label="Выберите видео",
         file_types=[".mp4", ".mov", ".mkv", ".avi"],
         type="filepath"
+    )
+
+    model_input = gr.Dropdown(
+        choices=["small", "medium"],
+        value="small",
+        label="Модель распознавания Whisper",
+        info="small — быстрее, medium — потенциально точнее",
+        interactive=True
     )
 
     generate_button = gr.Button(
