@@ -10,8 +10,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from main import process_video
-
+from main import process_video, process_audio
 
 # Настройка логирования
 logging.basicConfig(
@@ -45,7 +44,11 @@ async def transcribe_video(
 ):
     """Распознаёт речь, создаёт SRT и встраивает субтитры в видео."""
 
-    allowed_extensions = {".mp4", ".mov", ".mkv", ".avi"}
+    video_extensions = {".mp4", ".mov", ".mkv", ".avi"}
+
+    audio_extensions = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
+
+    allowed_extensions = video_extensions | audio_extensions
 
     allowed_models = {"small", "medium"}
 
@@ -101,20 +104,31 @@ async def transcribe_video(
 
         logger.info("Начинаем обработку: %s", request_id)
 
-        output_video, output_srt = process_video(
-            str(input_path),
-            model_name=model_name
-        )
+        if extension in video_extensions:
+            output_video, output_srt = process_video(
+                str(input_path),
+                model_name=model_name
+            )
+
+        else:
+            output_srt = process_audio(
+                str(input_path),
+                model_name=model_name
+            )
+            output_video = None
 
         zip_path = temp_dir / "subtitle_results.zip"
 
         # Упаковываем видео и субтитры в ZIP-архив.
         with zipfile.ZipFile(
-            zip_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED
+                zip_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED
         ) as archive:
-            archive.write(output_video, Path(output_video).name)
+
+            if output_video is not None:
+                archive.write(output_video, Path(output_video).name)
+
             archive.write(output_srt, Path(output_srt).name)
 
         logger.info("Обработка успешно завершена: %s", request_id)
@@ -144,7 +158,7 @@ async def transcribe_video(
 
         raise HTTPException(
             status_code=500,
-            detail="Произошла ошибка при обработке видео."
+            detail="Произошла ошибка при обработке файла."
         )
 
     finally:
