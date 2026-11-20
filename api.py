@@ -12,7 +12,7 @@ from starlette.background import BackgroundTask
 
 from main import process_video, process_audio
 
-# Настройка логирования
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -20,7 +20,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Создание FastAPI-приложения
 app = FastAPI(
     title="SubtitleGenerator API",
     description="API для автоматической генерации субтитров с помощью Whisper",
@@ -41,26 +40,19 @@ async def health_check():
 async def transcribe_video(
     file: UploadFile = File(...),
     model_name: str = Form("small"),
-    target_language: str = Form("original")
+    target_language: str = Form("original"),
+    censor_profanity: bool = Form(False)
 ):
-    """Распознаёт речь, создаёт SRT и встраивает субтитры в видео."""
+    """Распознаёт речь, создаёт SRT и обрабатывает аудио и видео."""
 
     video_extensions = {".mp4", ".mov", ".mkv", ".avi"}
-
     audio_extensions = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
 
     allowed_extensions = video_extensions | audio_extensions
-
     allowed_models = {"small", "medium"}
 
     allowed_languages = {
-        "original",
-        "ru",
-        "en",
-        "de",
-        "fr",
-        "es",
-        "zh"
+        "original", "ru", "en", "de", "fr", "es", "zh"
     }
 
     if target_language not in allowed_languages:
@@ -95,10 +87,18 @@ async def transcribe_video(
     temp_dir = Path(tempfile.mkdtemp())
     input_path = temp_dir / f"{request_id}{extension}"
 
-    # process_video сохраняет результаты в общую папку output.
     generated_files = [
-        Path("output") / f"{request_id}_{target_language}_subtitled.mp4",
-        Path("output") / f"{request_id}_{model_name}_{target_language}.srt"
+        Path("output") / f"{request_id}_original_subtitled.mp4",
+        Path("output") / f"{request_id}_ru_subtitled.mp4",
+        Path("output") / f"{request_id}_en_subtitled.mp4",
+        Path("output") / f"{request_id}_de_subtitled.mp4",
+        Path("output") / f"{request_id}_fr_subtitled.mp4",
+        Path("output") / f"{request_id}_es_subtitled.mp4",
+        Path("output") / f"{request_id}_zh_subtitled.mp4",
+        Path("output") / f"{request_id}_{model_name}_{target_language}.srt",
+        Path("output") / (
+            f"{request_id}_{model_name}_{target_language}_censored.wav"
+        )
     ]
 
     try:
@@ -108,11 +108,9 @@ async def transcribe_video(
             request_id
         )
 
-        # Сохраняем файл на диск, не загружая его целиком в память.
         with input_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Проверяем, что файл не пустой.
         if input_path.stat().st_size == 0:
             raise HTTPException(
                 status_code=400,
@@ -121,34 +119,39 @@ async def transcribe_video(
 
         logger.info("Начинаем обработку: %s", request_id)
 
+        output_audio = None
+
         if extension in video_extensions:
             output_video, output_srt = process_video(
                 str(input_path),
                 model_name=model_name,
-                target_language=target_language
+                target_language=target_language,
+                censor_profanity=censor_profanity
             )
-
         else:
-            output_srt = process_audio(
+            output_srt, output_audio = process_audio(
                 str(input_path),
                 model_name=model_name,
-                target_language=target_language
+                target_language=target_language,
+                censor_profanity=censor_profanity
             )
             output_video = None
 
         zip_path = temp_dir / "subtitle_results.zip"
 
-        # Упаковываем видео и субтитры в ZIP-архив.
         with zipfile.ZipFile(
-                zip_path,
-                "w",
-                compression=zipfile.ZIP_DEFLATED
+            zip_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED
         ) as archive:
 
             if output_video is not None:
                 archive.write(output_video, Path(output_video).name)
 
             archive.write(output_srt, Path(output_srt).name)
+
+            if output_audio is not None:
+                archive.write(output_audio, Path(output_audio).name)
 
         logger.info("Обработка успешно завершена: %s", request_id)
 
@@ -181,7 +184,6 @@ async def transcribe_video(
         )
 
     finally:
-        # Удаляем промежуточные результаты из общей папки output.
         for generated_file in generated_files:
             generated_file.unlink(missing_ok=True)
 

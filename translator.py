@@ -1,49 +1,10 @@
-import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-
-MODEL_NAME = "facebook/nllb-200-distilled-600M"
-
-# Поддерживаемые языки: код Whisper -> код NLLB
-LANGUAGES = {
-    "ru": "rus_Cyrl",
-    "en": "eng_Latn",
-    "de": "deu_Latn",
-    "fr": "fra_Latn",
-    "es": "spa_Latn",
-    "zh": "zho_Hans",
-}
-
-# Выбираем доступное устройство
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-
-# Модель и токенизатор будут загружены при первом переводе
-_tokenizer = None
-_model = None
-
-
-def load_translation_model():
-    """Загружает модель и токенизатор один раз."""
-    global _tokenizer, _model
-
-    if _tokenizer is None or _model is None:
-        print(f"Загрузка модели перевода на устройстве: {DEVICE}")
-
-        _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        _model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
-
-        _model.to(DEVICE)
-        _model.eval()
-
-    return _tokenizer, _model
-
 
 def translate_segments(
     segments: list,
     source_language: str,
     target_language: str
 ) -> list:
-    """Переводит текст сегментов Whisper, сохраняя временные метки."""
+    """Переводит сегменты Whisper, сохраняя временные метки и маркеры цензуры."""
 
     if target_language == "original":
         return segments
@@ -59,7 +20,6 @@ def translate_segments(
             f"{source_language}"
         )
 
-    # Если исходный и целевой языки совпадают, перевод не нужен
     if source_language == target_language:
         return segments
 
@@ -79,8 +39,12 @@ def translate_segments(
             translated_segments.append(segment.copy())
             continue
 
+        # Защищаем маркеры цензуры от изменений переводчиком
+        placeholder = "CENSORPLACEHOLDER"
+        protected_text = text.replace("***", placeholder)
+
         inputs = tokenizer(
-            text,
+            protected_text,
             return_tensors="pt",
             truncation=True,
             max_length=512
@@ -97,6 +61,12 @@ def translate_segments(
             translated_tokens,
             skip_special_tokens=True
         )[0]
+
+        # Возвращаем маркер цензуры
+        translated_text = translated_text.replace(
+            placeholder,
+            "***"
+        )
 
         translated_segment = segment.copy()
         translated_segment["text"] = translated_text

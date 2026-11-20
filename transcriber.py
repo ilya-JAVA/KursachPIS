@@ -15,7 +15,8 @@ def transcribe_video(video_path: str, model_name: str = "small") -> dict:
         video_path,
         task="transcribe",
         verbose=False,
-        condition_on_previous_text=False
+        condition_on_previous_text=False,
+        word_timestamps=True
     )
 
     return result

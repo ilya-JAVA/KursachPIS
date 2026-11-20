@@ -10,7 +10,6 @@ import requests
 
 API_URL = "http://127.0.0.1:8000/transcribe"
 
-# Папка для результатов, полученных через интерфейс
 RESULTS_DIR = Path("output/gradio_results")
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
@@ -18,7 +17,12 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
 ALLOWED_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
 
-def generate_subtitles(file_path, model_name, target_language):
+def generate_subtitles(
+    file_path,
+    model_name,
+    target_language,
+    censor_profanity
+):
     """Отправляет аудио или видео в FastAPI и получает результаты."""
 
     if not file_path:
@@ -43,7 +47,6 @@ def generate_subtitles(file_path, model_name, target_language):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Отправляем файл в FastAPI
         with input_file.open("rb") as uploaded_file:
             response = requests.post(
                 API_URL,
@@ -56,28 +59,26 @@ def generate_subtitles(file_path, model_name, target_language):
                 },
                 data={
                     "model_name": model_name,
-                    "target_language": target_language
+                    "target_language": target_language,
+                    "censor_profanity": str(censor_profanity).lower()
                 },
                 timeout=1800
             )
 
         response.raise_for_status()
 
-        # Сохраняем полученный ZIP-архив
         archive_path = result_dir / "results.zip"
         archive_path.write_bytes(response.content)
 
-        # Распаковываем результаты
         with zipfile.ZipFile(archive_path, "r") as archive:
             for member in archive.infolist():
                 if member.is_dir():
                     continue
 
-                # Берём только имя файла, без путей из архива
                 filename = Path(member.filename).name
                 file_extension = Path(filename).suffix.lower()
 
-                if file_extension not in {".mp4", ".srt"}:
+                if file_extension not in {".mp4", ".srt", ".wav"}:
                     continue
 
                 output_path = result_dir / filename
@@ -86,7 +87,6 @@ def generate_subtitles(file_path, model_name, target_language):
                     with output_path.open("wb") as destination:
                         shutil.copyfileobj(source, destination)
 
-        # Находим готовые файлы
         output_video = next(
             result_dir.glob("*_subtitled.mp4"),
             None
@@ -97,20 +97,26 @@ def generate_subtitles(file_path, model_name, target_language):
             None
         )
 
+        output_audio = next(
+            result_dir.glob("*_censored.wav"),
+            None
+        )
+
         if output_srt is None:
             raise gr.Error("Сервер не вернул файл субтитров.")
 
-        # Формируем сообщение в зависимости от типа файла
         if output_video is not None:
-            status_message = (
-                "Видео с субтитрами и файл SRT успешно созданы!"
-            )
+            status_message = "Видео с субтитрами и файл SRT успешно созданы!"
         else:
             status_message = "Файл субтитров SRT успешно создан!"
+
+        if output_audio is not None:
+            status_message += " Цензурированное аудио также готово."
 
         return (
             str(output_video) if output_video else None,
             str(output_srt),
+            str(output_audio) if output_audio else None,
             status_message
         )
 
@@ -127,9 +133,7 @@ def generate_subtitles(file_path, model_name, target_language):
 
     except requests.exceptions.Timeout:
         shutil.rmtree(result_dir, ignore_errors=True)
-        raise gr.Error(
-            "Время ожидания обработки истекло."
-        )
+        raise gr.Error("Время ожидания обработки истекло.")
 
     except requests.exceptions.HTTPError as error:
         shutil.rmtree(result_dir, ignore_errors=True)
@@ -143,9 +147,7 @@ def generate_subtitles(file_path, model_name, target_language):
 
     except requests.exceptions.RequestException as error:
         shutil.rmtree(result_dir, ignore_errors=True)
-        raise gr.Error(
-            f"Ошибка при обращении к API: {error}"
-        )
+        raise gr.Error(f"Ошибка при обращении к API: {error}")
 
     except (zipfile.BadZipFile, OSError) as error:
         shutil.rmtree(result_dir, ignore_errors=True)
@@ -155,12 +157,9 @@ def generate_subtitles(file_path, model_name, target_language):
 
     except Exception as error:
         shutil.rmtree(result_dir, ignore_errors=True)
-        raise gr.Error(
-            f"Ошибка обработки: {error}"
-        )
+        raise gr.Error(f"Ошибка обработки: {error}")
 
 
-# Создание интерфейса
 with gr.Blocks(title="SubtitleGenerator") as demo:
 
     gr.Markdown(
@@ -206,6 +205,12 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         interactive=True
     )
 
+    censor_input = gr.Checkbox(
+        label="Цензурировать ненормативную лексику",
+        value=False,
+        info="Заменять ненормативные слова на *** и звуковой сигнал"
+    )
+
     generate_button = gr.Button(
         "Создать субтитры",
         variant="primary"
@@ -224,12 +229,22 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         label="Скачать файл субтитров (SRT)"
     )
 
+    audio_output = gr.File(
+        label="Скачать цензурированное аудио (WAV)"
+    )
+
     generate_button.click(
         fn=generate_subtitles,
-        inputs=[file_input, model_input, language_input],
+        inputs=[
+            file_input,
+            model_input,
+            language_input,
+            censor_input
+        ],
         outputs=[
             video_output,
             srt_output,
+            audio_output,
             status
         ]
     )
