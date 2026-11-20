@@ -18,7 +18,7 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
 ALLOWED_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
 
-def generate_subtitles(file_path, model_name):
+def generate_subtitles(file_path, model_name, target_language):
     """Отправляет аудио или видео в FastAPI и получает результаты."""
 
     if not file_path:
@@ -55,7 +55,8 @@ def generate_subtitles(file_path, model_name):
                     )
                 },
                 data={
-                    "model_name": model_name
+                    "model_name": model_name,
+                    "target_language": target_language
                 },
                 timeout=1800
             )
@@ -189,6 +190,22 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         interactive=True
     )
 
+    language_input = gr.Dropdown(
+        choices=[
+            ("Оригинальный язык (без перевода)", "original"),
+            ("Русский", "ru"),
+            ("Английский", "en"),
+            ("Немецкий", "de"),
+            ("Французский", "fr"),
+            ("Испанский", "es"),
+            ("Китайский (упрощённый)", "zh")
+        ],
+        value="original",
+        label="Язык субтитров",
+        info="Выберите язык, на котором должны быть созданы субтитры",
+        interactive=True
+    )
+
     generate_button = gr.Button(
         "Создать субтитры",
         variant="primary"
@@ -209,7 +226,7 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
 
     generate_button.click(
         fn=generate_subtitles,
-        inputs=[file_input, model_input],
+        inputs=[file_input, model_input, language_input],
         outputs=[
             video_output,
             srt_output,

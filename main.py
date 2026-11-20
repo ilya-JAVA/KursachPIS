@@ -3,13 +3,15 @@ from pathlib import Path
 from transcriber import transcribe_video
 from subtitle_generator import save_srt
 from video_processor import burn_subtitles
+from translator import translate_segments
 
 
 def process_video(
     video_path: str,
-    model_name: str = "small"
+    model_name: str = "small",
+    target_language: str = "original"
 ) -> tuple[str, str]:
-    """Создаёт субтитры и встраивает их в видео."""
+    """Создаёт субтитры, переводит их и встраивает в видео."""
 
     video = Path(video_path)
 
@@ -19,16 +21,23 @@ def process_video(
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    subtitles_path = output_dir / f"{video.stem}_{model_name}.srt"
-    output_video_path = output_dir / f"{video.stem}_subtitled.mp4"
+    subtitles_path = output_dir / f"{video.stem}_{model_name}_{target_language}.srt"
+    output_video_path = output_dir / f"{video.stem}_{target_language}_subtitled.mp4"
 
-    print("Шаг 1/3: распознаём речь...")
+    print("Шаг 1/4: распознаём речь...")
     result = transcribe_video(str(video), model_name=model_name)
 
-    print("Шаг 2/3: сохраняем субтитры...")
+    print("Шаг 2/4: переводим субтитры...")
+    result["segments"] = translate_segments(
+        segments=result["segments"],
+        source_language=result["language"],
+        target_language=target_language
+    )
+
+    print("Шаг 3/4: сохраняем субтитры...")
     save_srt(result, str(subtitles_path))
 
-    print("Шаг 3/3: встраиваем субтитры в видео...")
+    print("Шаг 4/4: встраиваем субтитры в видео...")
     burn_subtitles(
         str(video),
         str(subtitles_path),
@@ -42,8 +51,14 @@ def process_video(
     return str(output_video_path), str(subtitles_path)
 
 
-def process_audio(audio_path: str, model_name: str = "small") -> str:
-    """Создаёт субтитры из отдельного аудиофайла."""
+
+
+def process_audio(
+    audio_path: str,
+    model_name: str = "small",
+    target_language: str = "original"
+) -> str:
+    """Создаёт субтитры из аудио с возможностью перевода."""
 
     audio = Path(audio_path)
 
@@ -53,18 +68,26 @@ def process_audio(audio_path: str, model_name: str = "small") -> str:
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    subtitles_path = output_dir / f"{audio.stem}_{model_name}.srt"
+    subtitles_path = output_dir / f"{audio.stem}_{model_name}_{target_language}.srt"
 
-    print("Шаг 1/2: распознаём речь...")
+    print("Шаг 1/3: распознаём речь...")
     result = transcribe_video(str(audio), model_name=model_name)
 
-    print("Шаг 2/2: сохраняем субтитры...")
+    print("Шаг 2/3: переводим субтитры...")
+    result["segments"] = translate_segments(
+        segments=result["segments"],
+        source_language=result["language"],
+        target_language=target_language
+    )
+
+    print("Шаг 3/3: сохраняем субтитры...")
     save_srt(result, str(subtitles_path))
 
     print("Готово!")
     print(f"Субтитры: {subtitles_path}")
 
     return str(subtitles_path)
+
 
 
 if __name__ == "__main__":

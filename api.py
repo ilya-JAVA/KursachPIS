@@ -40,7 +40,8 @@ async def health_check():
 @app.post("/transcribe")
 async def transcribe_video(
     file: UploadFile = File(...),
-    model_name: str = Form("small")
+    model_name: str = Form("small"),
+    target_language: str = Form("original")
 ):
     """Распознаёт речь, создаёт SRT и встраивает субтитры в видео."""
 
@@ -51,6 +52,22 @@ async def transcribe_video(
     allowed_extensions = video_extensions | audio_extensions
 
     allowed_models = {"small", "medium"}
+
+    allowed_languages = {
+        "original",
+        "ru",
+        "en",
+        "de",
+        "fr",
+        "es",
+        "zh"
+    }
+
+    if target_language not in allowed_languages:
+        raise HTTPException(
+            status_code=400,
+            detail="Неподдерживаемый язык перевода."
+        )
 
     if model_name not in allowed_models:
         raise HTTPException(
@@ -80,8 +97,8 @@ async def transcribe_video(
 
     # process_video сохраняет результаты в общую папку output.
     generated_files = [
-        Path("output") / f"{request_id}_{model_name}_subtitled.mp4",
-        Path("output") / f"{request_id}_{model_name}.srt"
+        Path("output") / f"{request_id}_{target_language}_subtitled.mp4",
+        Path("output") / f"{request_id}_{model_name}_{target_language}.srt"
     ]
 
     try:
@@ -107,13 +124,15 @@ async def transcribe_video(
         if extension in video_extensions:
             output_video, output_srt = process_video(
                 str(input_path),
-                model_name=model_name
+                model_name=model_name,
+                target_language=target_language
             )
 
         else:
             output_srt = process_audio(
                 str(input_path),
-                model_name=model_name
+                model_name=model_name,
+                target_language=target_language
             )
             output_video = None
 
