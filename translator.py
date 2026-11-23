@@ -1,3 +1,42 @@
+from functools import lru_cache
+
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+
+MODEL_NAME = "facebook/nllb-200-distilled-600M"
+
+DEVICE = (
+    "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
+
+LANGUAGES = {
+    "ru": "rus_Cyrl",
+    "en": "eng_Latn",
+    "de": "deu_Latn",
+    "fr": "fra_Latn",
+    "es": "spa_Latn",
+    "zh": "zho_Hans",
+}
+
+
+@lru_cache(maxsize=1)
+def load_translation_model():
+    """Загружает модель NLLB-200 и токенизатор."""
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        MODEL_NAME
+    )
+
+    model.to(DEVICE)
+    model.eval()
+
+    return tokenizer, model
+
 
 def translate_segments(
     segments: list,
@@ -26,6 +65,7 @@ def translate_segments(
     tokenizer, model = load_translation_model()
 
     tokenizer.src_lang = LANGUAGES[source_language]
+
     target_language_id = tokenizer.convert_tokens_to_ids(
         LANGUAGES[target_language]
     )

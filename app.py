@@ -78,7 +78,7 @@ def generate_subtitles(
                 filename = Path(member.filename).name
                 file_extension = Path(filename).suffix.lower()
 
-                if file_extension not in {".mp4", ".srt", ".wav"}:
+                if file_extension not in {".mp4", ".srt"}:
                     continue
 
                 output_path = result_dir / filename
@@ -97,10 +97,6 @@ def generate_subtitles(
             None
         )
 
-        output_audio = next(
-            result_dir.glob("*_censored.wav"),
-            None
-        )
 
         if output_srt is None:
             raise gr.Error("Сервер не вернул файл субтитров.")
@@ -110,13 +106,9 @@ def generate_subtitles(
         else:
             status_message = "Файл субтитров SRT успешно создан!"
 
-        if output_audio is not None:
-            status_message += " Цензурированное аудио также готово."
-
         return (
             str(output_video) if output_video else None,
             str(output_srt),
-            str(output_audio) if output_audio else None,
             status_message
         )
 
@@ -229,9 +221,6 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         label="Скачать файл субтитров (SRT)"
     )
 
-    audio_output = gr.File(
-        label="Скачать цензурированное аудио (WAV)"
-    )
 
     generate_button.click(
         fn=generate_subtitles,
@@ -244,7 +233,6 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         outputs=[
             video_output,
             srt_output,
-            audio_output,
             status
         ]
     )
