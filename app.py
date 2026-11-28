@@ -1,3 +1,4 @@
+import json
 import shutil
 import uuid
 import zipfile
@@ -7,6 +8,7 @@ from pathlib import Path
 import gradio as gr
 import requests
 
+from api import parse_timestamp
 
 API_URL = "http://127.0.0.1:8000/transcribe"
 
@@ -21,7 +23,9 @@ def generate_subtitles(
     file_path,
     model_name,
     target_language,
-    censor_profanity
+    censor_profanity,
+    subtitle_mode,
+    intervals
 ):
     """Отправляет аудио или видео в FastAPI и получает результаты."""
 
@@ -40,6 +44,36 @@ def generate_subtitles(
             "Неподдерживаемый формат файла. "
             "Выберите аудио или видео."
         )
+
+    if subtitle_mode == "multiple":
+        parsed_intervals = []
+
+        for interval in intervals:
+            try:
+                start = parse_timestamp(interval["start"])
+                end = parse_timestamp(interval["end"])
+            except (ValueError, TypeError, KeyError):
+                raise gr.Error(
+                    "Некорректное время. Используйте формат HH:MM:SS."
+                )
+
+            if start >= end:
+                raise gr.Error(
+                    "Начало интервала должно быть раньше окончания."
+                )
+
+            parsed_intervals.append((start, end))
+
+        for i in range(len(parsed_intervals)):
+            for j in range(i + 1, len(parsed_intervals)):
+                start1, end1 = parsed_intervals[i]
+                start2, end2 = parsed_intervals[j]
+
+                if start1 < end2 and start2 < end1:
+                    raise gr.Error(
+                        "Вы указали одинаковые или пересекающиеся "
+                        "диапазоны времени. Измените интервалы."
+                    )
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -60,7 +94,9 @@ def generate_subtitles(
                 data={
                     "model_name": model_name,
                     "target_language": target_language,
-                    "censor_profanity": str(censor_profanity).lower()
+                    "censor_profanity": str(censor_profanity).lower(),
+                    "subtitle_mode": subtitle_mode,
+                    "intervals": json.dumps(intervals, ensure_ascii=False)
                 },
                 timeout=1800
             )
@@ -151,8 +187,68 @@ def generate_subtitles(
         shutil.rmtree(result_dir, ignore_errors=True)
         raise gr.Error(f"Ошибка обработки: {error}")
 
+LANGUAGE_CHOICES = [
+    ("Оригинальный язык", "original"),
+    ("Русский", "ru"),
+    ("Английский", "en"),
+    ("Немецкий", "de"),
+    ("Французский", "fr"),
+    ("Испанский", "es"),
+    ("Китайский (упрощённый)", "zh")
+]
+
+
+def add_interval(intervals):
+    intervals = list(intervals)
+    intervals.append({
+        "start": "00:00:00",
+        "end": "00:01:00",
+        "language": "ru"
+    })
+    return intervals
+
+
+def remove_interval(intervals, index):
+    intervals = list(intervals)
+
+    if len(intervals) > 1:
+        intervals.pop(index)
+
+    return intervals
+
+
+def update_interval(start, end, language, intervals, index):
+    intervals = list(intervals)
+
+    intervals[index] = {
+        "start": start,
+        "end": end,
+        "language": language
+    }
+
+    return intervals
+
+
+def update_subtitle_mode(mode):
+    return (
+        gr.update(visible=(mode == "single")),
+        gr.update(visible=(mode == "multiple"))
+    )
 
 with gr.Blocks(title="SubtitleGenerator") as demo:
+
+    intervals_state = gr.State([
+        {
+            "start": "00:00:00",
+            "end": "00:01:30",
+            "language": "ru"
+        },
+        {
+            "start": "00:01:30",
+            "end": "00:03:00",
+            "language": "en"
+        }
+    ])
 
     gr.Markdown(
         """
@@ -197,6 +293,16 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         interactive=True
     )
 
+    subtitle_mode = gr.Radio(
+        choices=[
+            ("Один язык для всего видео", "single"),
+            ("Несколько языков по интервалам", "multiple")
+        ],
+        value="single",
+        label="Режим создания субтитров",
+        interactive=True
+    )
+
     censor_input = gr.Checkbox(
         label="Цензурировать ненормативную лексику",
         value=False,
@@ -221,14 +327,103 @@ with gr.Blocks(title="SubtitleGenerator") as demo:
         label="Скачать файл субтитров (SRT)"
     )
 
+    # Настройка языковых интервалов находится внизу интерфейса.
+    with gr.Column(visible=False) as intervals_container:
 
+        gr.Markdown("### Настройка языковых интервалов")
+
+        add_interval_button = gr.Button("+ Добавить интервал")
+
+        @gr.render(inputs=intervals_state)
+        def render_intervals(intervals):
+
+            for index, interval in enumerate(intervals):
+
+                with gr.Row():
+
+                    start_input = gr.Textbox(
+                        label="Начало",
+                        value=interval["start"],
+                        placeholder="00:00:00",
+                        interactive = True
+                    )
+
+                    end_input = gr.Textbox(
+                        label="Конец",
+                        value=interval["end"],
+                        placeholder="00:01:00",
+                        interactive=True
+                    )
+
+                    language_input_interval = gr.Dropdown(
+                        choices=LANGUAGE_CHOICES,
+                        value=interval["language"],
+                        label="Язык",
+                        interactive=True
+                    )
+
+                    remove_button = gr.Button(
+                        "Удалить",
+                        size="sm"
+                    )
+
+                for component in [
+                    start_input,
+                    end_input,
+                    language_input_interval
+                ]:
+                    component.change(
+                        fn=lambda start, end, language, current, i=index:
+                        update_interval(
+                            start,
+                            end,
+                            language,
+                            current,
+                            i
+                        ),
+                        inputs=[
+                            start_input,
+                            end_input,
+                            language_input_interval,
+                            intervals_state
+                        ],
+                        outputs=intervals_state
+                    )
+
+                remove_button.click(
+                    fn=lambda current, i=index:
+                    remove_interval(current, i),
+                    inputs=intervals_state,
+                    outputs=intervals_state
+                )
+
+    # Обработчик добавления интервала регистрируется один раз.
+    add_interval_button.click(
+        fn=add_interval,
+        inputs=intervals_state,
+        outputs=intervals_state
+    )
+
+    # Переключение между режимами.
+    subtitle_mode.change(
+        fn=update_subtitle_mode,
+        inputs=subtitle_mode,
+        outputs=[
+            language_input,
+            intervals_container
+        ]
+    )
+
+    # Запуск генерации субтитров.
     generate_button.click(
         fn=generate_subtitles,
         inputs=[
             file_input,
             model_input,
             language_input,
-            censor_input
+            censor_input,
+            subtitle_mode,
+            intervals_state
         ],
         outputs=[
             video_output,

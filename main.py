@@ -6,12 +6,50 @@ from video_processor import burn_subtitles
 from translator import translate_segments
 from censor import censor_segments, censor_audio
 
+def translate_segments_by_intervals(
+    segments: list,
+    source_language: str,
+    intervals: list
+) -> list:
+    """Переводит сегменты согласно языкам заданных временных интервалов."""
+
+    translated_segments = []
+
+    for segment in segments:
+        segment_start = segment["start"]
+
+        matching_interval = next(
+            (
+                interval
+                for interval in intervals
+                if interval["start"] <= segment_start < interval["end"]
+            ),
+            None
+        )
+
+        if matching_interval is None:
+            translated_segments.append(segment.copy())
+            continue
+
+        target_language = matching_interval["language"]
+
+        translated_segment = translate_segments(
+            segments=[segment],
+            source_language=source_language,
+            target_language=target_language
+        )
+
+        translated_segments.extend(translated_segment)
+
+    return translated_segments
 
 def process_video(
     video_path: str,
     model_name: str = "small",
     target_language: str = "original",
-    censor_profanity: bool = False
+    censor_profanity: bool = False,
+    subtitle_mode: str = "single",
+    intervals: list | None = None
 ) -> tuple[str, str]:
     """Создаёт субтитры, переводит их и встраивает в видео."""
 
@@ -62,11 +100,19 @@ def process_video(
         print("Шаг 2/5: цензурирование отключено.")
 
     print("Шаг 3/5: переводим субтитры...")
-    result["segments"] = translate_segments(
-        segments=result["segments"],
-        source_language=result["language"],
-        target_language=target_language
-    )
+
+    if subtitle_mode == "multiple":
+        result["segments"] = translate_segments_by_intervals(
+            segments=result["segments"],
+            source_language=result["language"],
+            intervals=intervals or []
+        )
+    else:
+        result["segments"] = translate_segments(
+            segments=result["segments"],
+            source_language=result["language"],
+            target_language=target_language
+        )
 
     print("Шаг 4/5: сохраняем субтитры...")
     save_srt(result, str(subtitles_path))
@@ -99,7 +145,9 @@ def process_audio(
     audio_path: str,
     model_name: str = "small",
     target_language: str = "original",
-    censor_profanity: bool = False
+    censor_profanity: bool = False,
+    subtitle_mode: str = "single",
+    intervals: list | None = None
 ) -> tuple[str, str | None]:
     """Создаёт субтитры из аудио с возможностью перевода и цензурирования."""
 
@@ -147,11 +195,19 @@ def process_audio(
         print("Шаг 2/4: цензурирование отключено.")
 
     print("Шаг 3/4: переводим субтитры...")
-    result["segments"] = translate_segments(
-        segments=result["segments"],
-        source_language=result["language"],
-        target_language=target_language
-    )
+
+    if subtitle_mode == "multiple":
+        result["segments"] = translate_segments_by_intervals(
+            segments=result["segments"],
+            source_language=result["language"],
+            intervals=intervals or []
+        )
+    else:
+        result["segments"] = translate_segments(
+            segments=result["segments"],
+            source_language=result["language"],
+            target_language=target_language
+        )
 
     print("Шаг 4/4: сохраняем субтитры...")
     save_srt(result, str(subtitles_path))

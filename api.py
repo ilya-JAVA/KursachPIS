@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import uuid
 import zipfile
+import json
 
 from pathlib import Path
 
@@ -35,13 +36,31 @@ async def health_check():
         "message": "SubtitleGenerator API is running"
     }
 
+def parse_timestamp(value: str) -> float:
+    """Преобразует время HH:MM:SS в секунды."""
 
+    if not isinstance(value, str):
+        raise ValueError("Время должно быть строкой.")
+
+    parts = value.strip().split(":")
+
+    if len(parts) != 3:
+        raise ValueError("Используй формат HH:MM:SS.")
+
+    hours, minutes, seconds = map(int, parts)
+
+    if hours < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        raise ValueError("Некорректное значение времени.")
+
+    return hours * 3600 + minutes * 60 + seconds
 @app.post("/transcribe")
 async def transcribe_video(
     file: UploadFile = File(...),
     model_name: str = Form("small"),
     target_language: str = Form("original"),
-    censor_profanity: bool = Form(False)
+    censor_profanity: bool = Form(False),
+    subtitle_mode: str = Form("single"),
+    intervals: str = Form("[]")
 ):
     """Распознаёт речь, создаёт SRT и обрабатывает аудио и видео."""
 
@@ -55,6 +74,92 @@ async def transcribe_video(
         "original", "ru", "en", "de", "fr", "es", "zh"
     }
 
+    allowed_subtitle_modes = {"single", "multiple"}
+
+    if subtitle_mode not in allowed_subtitle_modes:
+        raise HTTPException(
+            status_code=400,
+            detail="Неподдерживаемый режим субтитров."
+        )
+
+    try:
+        intervals_data = json.loads(intervals)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Некорректный формат временных интервалов."
+        )
+
+    if not isinstance(intervals_data, list):
+        raise HTTPException(
+            status_code=400,
+            detail="Интервалы должны быть списком."
+        )
+
+    allowed_interval_languages = {
+        "original", "ru", "en", "de", "fr", "es", "zh"
+    }
+
+
+    if subtitle_mode == "multiple":
+        if not intervals_data:
+            raise HTTPException(
+                status_code=400,
+                detail="Необходимо указать хотя бы один интервал."
+            )
+
+        # Сначала проверяем и преобразуем каждый интервал
+        for interval in intervals_data:
+            if not isinstance(interval, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Некорректный формат интервала."
+                )
+
+            if not all(key in interval for key in ("start", "end", "language")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="В интервале отсутствуют обязательные поля."
+                )
+
+            if interval["language"] not in allowed_interval_languages:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Неподдерживаемый язык интервала."
+                )
+
+            try:
+                interval["start"] = parse_timestamp(interval["start"])
+                interval["end"] = parse_timestamp(interval["end"])
+            except (ValueError, TypeError, KeyError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Некорректное время интервала. Используй HH:MM:SS."
+                )
+
+            if interval["start"] >= interval["end"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Начало интервала должно быть раньше его окончания."
+                )
+
+        # Затем проверяем интервалы на пересечения
+        for i in range(len(intervals_data)):
+            for j in range(i + 1, len(intervals_data)):
+                start1 = intervals_data[i]["start"]
+                end1 = intervals_data[i]["end"]
+
+                start2 = intervals_data[j]["start"]
+                end2 = intervals_data[j]["end"]
+
+                if start1 < end2 and start2 < end1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Вы указали одинаковые или пересекающиеся "
+                            "диапазоны времени. Измените интервалы."
+                        )
+                    )
     if target_language not in allowed_languages:
         raise HTTPException(
             status_code=400,
@@ -126,14 +231,18 @@ async def transcribe_video(
                 str(input_path),
                 model_name=model_name,
                 target_language=target_language,
-                censor_profanity=censor_profanity
+                censor_profanity=censor_profanity,
+                subtitle_mode=subtitle_mode,
+                intervals=intervals_data
             )
         else:
             output_srt, output_audio = process_audio(
                 str(input_path),
                 model_name=model_name,
                 target_language=target_language,
-                censor_profanity=censor_profanity
+                censor_profanity=censor_profanity,
+                subtitle_mode=subtitle_mode,
+                intervals=intervals_data
             )
             output_video = None
 
